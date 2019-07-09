@@ -22,48 +22,39 @@ fun newSym () =
     end
 
 
+
 structure Func =
 struct
-datatype t = C of v
+
+datatype t = C of real
+           | Var of string
            | Id
+           | Limit of int * string * t
+           | Fadd
            | Add
            | Mul
-           | Fadd of int
            | Pair of t * t
            | Left
            | Right
            | Circ of t * t
-     and v = R of real
-           | VPair of v * v
-           | Vec of int * t
-           | None
 
-datatype d = scale of Real
-           | dup of d * d
-           | jam of d * d
-
-fun circs l =
-    let
-        val r = List.foldr (fn (e, r) =>
-                               case r of
-                                   NONE => SOME e
-                                 | SOME r => SOME (Circ (e, r))
-                           ) NONE l
-    in
-        case r of
-            NONE => Id
-          | SOME r => r
-    end
 fun add2 (a, b) = Circ (Add, Pair (a, b))
 fun mul2 (a, b) = Circ (Mul, Pair (a, b))
 fun left e = Circ (Left, e)
 fun right e = Circ (Right, e)
 
-fun layoutFunc (C v, _) = layoutValue v
+fun layoutFunc (C v, _) = Real.toString v
+  | layoutFunc (Var x, _) = x
   | layoutFunc (Id, _) = "id"
+  | layoutFunc (Limit (i, x, body), _) = "tab[" ^ x ^ " in " ^ (Int.toString i) ^ ": " ^ (layoutFunc (body, false)) ^ "]"
+  | layoutFunc (Fadd, _) = "⊕"
+    (* let *)
+    (*     val s = "⊕ " ^ (layoutFunc (vec, true)) *)
+    (* in *)
+    (*     if ifp then paren s else s *)
+    (* end *)
   | layoutFunc (Add, _) = "addC"
   | layoutFunc (Mul, _) = "mulC"
-  | layoutFunc (Fadd len, _) = "faddC[" ^ (Int.toString len) ^"]"
   | layoutFunc (Pair (e1, e2), ifp) =
     let
         val s = (layoutFunc (e1, true)) ^ " △ " ^ (layoutFunc (e2, true))
@@ -78,145 +69,131 @@ fun layoutFunc (C v, _) = layoutValue v
     in
         if ifp then paren s else s
     end
-and layoutValue (R r) = Real.toString r
-  | layoutValue (VPair (a, b)) = paren ((layoutValue a) ^ ", " ^ (layoutValue b))
-  | layoutValue (Vec (len, f)) = "[" ^ (Int.toString len) ^ ": " ^ (layoutFunc (f, false)) ^ "]"
-  | layoutValue (None) = "0"
 
 fun layout func = layoutFunc (func, true)
 
-fun slope func =
+fun subst (body, id, e) =
     let
-        val 
+        fun aux body =
+            case body of
+                (C v) => C v
+              | Var y => if id = y then e else Var y
+              | Id => Id
+              | Limit (len, y, body) =>
+                if id = y then Limit (len, y, body) else Limit (len, y, aux body)
+              | Fadd => Fadd
+              | Add => Add
+              | Mul => Mul
+              | Pair (b1, b2) => Pair (subst (b1, id, e), subst (b2, id, e))
+              | Left => Left
+              | Right => Right
+              | Circ (b1, b2) => Circ (subst (b1, id, e), subst (b2, id, e))
     in
+        aux body
     end
 
-fun eval (f, v) =
-    case (f, v) of
-        (_, None) => None
-      | (C v, _) => v
-      | (Id, v) => v
-      | (Add, VPair (a, b)) =>
-        (case (a, b) of
-             (R a, R b) => R (a + b)
-           | (None, R b) => R b
-           | (R a, None) => R a
-           | (Vec (len1, func1), Vec (len2, func2)) =>
-             
-           | _ => raise Fail "eval: Add"
-        )
-      | (Fadd len, vec) =>
-        (case vec of
-             Vec (len, func) =>
-             let
-                 val base = List.tabulate (len, fn i => R (Real.fromInt i))
-                                          val r = 
-                 eval (func, )
-             in
-             end
-           | _ => raise Fail "eval: Add"
-        )
-      | (Mul, VPair (a, b)) =>
-        (case (a, b) of
-             (R a, R b) => R (a * b)
-           | (None, _) => None
-           | (_, None) => None
-           | _ => raise Fail ("eval: Mul " ^ (layoutValue (VPair (a, b))))
-        )
-      | (Pair (f1, f2), v) => VPair (eval (f1, v), eval (f2, v))
-      | (Left, VPair (a, b)) => a
-      | (Right, VPair (a, b)) => b
-      | (Circ (f1, f2), v) => eval (f1, eval (f2, v))
-      | _ => raise Fail ("eval: " ^ (layout f) ^ " in " ^  (layoutValue v))
-fun pe func =
-    case func of
-        C v =>
-        (case v of
-             VPair (a, b) => Pair (pe (C a), pe (C b))
-           | x => C x
-        )
-      | Circ (f1, f2) =>
-        (case (pe f1, pe f2) of
-             (a, Id) => a
-           | (Id, b) => b
-           | (Add, (Pair (C None, b))) => b
-           | (Add, (Pair (a, C None))) => a
-           | (Mul, (Pair (C None, _))) => C None
-           | (Mul, (Pair (_, C None))) => C None
-           | (Pair (f1, f2), b) => Pair (pe (Circ (f1, b)), pe (Circ (f2, b)))
-           | (Left, Pair (a, b)) => a
-           | (Right, Pair (a, b)) => b
-           | (C v, _) => C v
-           | (Circ (f, g), k) => pe (Circ (f, Circ (g, k)))
-           | (f1, f2) => Circ (f1, f2)
-        )
-      | Pair (a, b) => Pair (pe a, pe b)
-      | x => x
-fun ad func : (v -> t)=
-    case func of
-        C v => (fn v => C None)
-      | Id =>
-        (fn (v: v) => Id)
-      | Add =>
-        (fn v => Add)
-      | Mul =>
-        (fn v =>
-            add2 (mul2 (left (C v), right Id), mul2 (right (C v), left Id))
-        )
-      | Pair (f1, f2) =>
-        (fn v =>
-            Pair ((ad f1) v, (ad f2) v)
-        )
-      | Left =>
-        (fn v => Left)
-      | Right =>
-        (fn v => Right)
-      | Circ (f1, f2) =>
-        (fn v =>
+fun eval (f, v: t) : t =
+    let
+        fun evalAdd (C a, C b) = C (a + b)
+          | evalAdd (Limit (len1, x1, f1), Limit (len2, x2, f2)) =
             let
-                val v2 = eval (f2, v)
-                val d2 = (ad f2) v
-                val d1 = (ad f1) v2
+                val x = newSym ()
+                val f1 = subst (f1, x1, Id)
+                val f2 = subst (f2, x2, Id)
+                val f = add2 (f1, f2)
             in
-                Circ (d1, d2)
+                Limit (len1, x, f)
             end
-        )
+          | evalAdd (Pair (v11, v12), Pair (v21, v22)) = Pair (evalAdd (v11, v12), evalAdd (v21, v22))
+          | evalAdd (a, b) = add2 (a, b)
+        fun evalMul (C a, C b) = C (a * b)
+          | evalMul (Limit (len1, x1, f1), Limit (len2, x2, f2)) =
+            let
+                val x = newSym ()
+                (* val _ = pLn (layout f1) *)
+                val f1 = subst (f1, x1, Id)
+                (* val _ = pLn (layout f1) *)
+                val f2 = subst (f2, x2, Id)
+                val f = mul2 (f1, f2)
+            in
+                Limit (len1, x, f)
+            end
+          | evalMul (Pair (v11, v12), Pair (v21, v22)) = Pair (evalMul (v11, v12), evalMul (v21, v22))
+          | evalMul (a, b) = mul2 (a, b)
+    in
+        case (f, v) of
+            (C v, _) => C v
+          | (Id, v) => v
+          | (Var x, _) => Var x
+          | (Limit (len, x, body), v) => Limit (len, x, eval (body, v))
+          | (Fadd, Limit (len, x, body)) =>
+            let
+                val body = subst (body, x, Id)
+                val base = List.tabulate (len, fn i => C (Real.fromInt i))
+                val res = List.map (fn v => eval (body, v)) base
+                val r = List.foldl (fn (e, r) =>
+                                       case r of
+                                           NONE => SOME e
+                                         | SOME r => SOME (add2 (r, e))
+                                   ) NONE res
+            in
+                case r of
+                    NONE => raise Fail "eval: Fadd"
+                  | SOME r => eval (r, v)
+            end
+          | (Add, Pair (a, b)) => evalAdd (a, b)
+          | (Mul, Pair (a, b)) => evalMul (a, b)
+          | (Pair (f1, f2), v) => Pair (eval (f1, v), eval (f2, v))
+          | (Left, Pair (a, b)) => a
+          | (Right, Pair (a, b)) => b
+          | (Circ (f1, f2), v) => eval (f1, eval (f2, v))
+          | _ => raise Fail ("eval: " ^ (layout f) ^ " in " ^  (layout v))
+    end
 fun pLnEval (f, v) =
     let
         val r = eval (f, v)
-        val s = (layout (pe f)) ^ ": " ^ (layoutValue v) ^ " -> " ^ (layoutValue r)
+        val s = (layout f) ^ ": " ^ (layout v) ^ " -> " ^ (layout r)
     in
-        s
+        pLn s
     end
-fun pLnDiff (f, v) = pLnEval (f v, v)
+fun pLnVec (Limit (len, x, body)) =
+    let
+        val body = subst (body, x, Id)
+        val base = List.tabulate (len, fn i => C (Real.fromInt i))
+        val res = List.map (fn v => eval (body, v)) base
+        val s = list2string (layout, res)
+    in
+        pLn s
+    end
+  | pLnVec _ = raise Fail "pLnVec: not a vec"
 end
 
 open Func;
 let
-    val fun1 = add2 (C (R 1.0), mul2 (C (R 2.0), Id))
-    val _ = pLn (pLnEval (fun1, R 0.0))
-    val _ = pLn (pLnEval (fun1, R 1.0))
-    val _ = pLn (pLnEval (fun1, R 2.0))
-    val d1 = ad fun1
-    val _ = pLn (pLnDiff (d1, R 0.0))
-    val _ = pLn (pLnDiff (d1, R 1.0))
-    val _ = pLn (pLnDiff (d1, R 2.0))
-    val vec1 =  Vec (6, fun1)
-    val _ = pLn (layoutValue vec1)
-    val elemwise = mul2(Id, Id)
+    val fun1 = add2 (C 1.0, mul2 (C 2.0, Id))
+    val _ = pLnEval (fun1, C 0.0)
+    val _ = pLnEval (fun1, C 1.0)
+    val _ = pLnEval (fun1, C 2.0)
+    (* val _ = pLnDiff (fun1, C 0.0) *)
+    (* val _ = pLnDiff (fun1, C 1.0) *)
+    (* val _ = pLnDiff (fun1, C 2.0) *)
+    val vec1 = Limit (6, "x", add2 (C 1.0, mul2 (C 2.0, Var "x")))
+    val _ = pLn (layout vec1)
+    val _ = pLnVec vec1
+    val elemwise = mul2 (Id, Id)
     val _ = pLn (layout elemwise)
     val fun2 = Circ (elemwise, fun1)
-    val _ = pLn (pLnEval (fun2, R 0.0))
-    val _ = pLn (pLnEval (fun2, R 1.0))
-    val _ = pLn (pLnEval (fun2, R 2.0))
-    val d2 = (ad fun2) (R 0.0)
-    val _ = pLn (pLnEval (d2, R 0.0))
-    val _ = pLn (pLnEval (d2, R 1.0))
-    val _ = pLn (pLnEval (d2, R 2.0))
-    val d2 = (ad fun2) (R 1.0)
-    val _ = pLn (pLnEval (d2, R 0.0))
-    val _ = pLn (pLnEval (d2, R 1.0))
-    val _ = pLn (pLnEval (d2, R 2.0))
+    val _ = pLnEval (fun2, C 0.0)
+    val _ = pLnEval (fun2, C 1.0)
+    val _ = pLnEval (fun2, C 2.0)
+    val _ = pLnEval (elemwise, vec1)
+    val _ = pLnVec (eval (elemwise, vec1))
+    val dot = Circ (Fadd, mul2 (Id, Id))
+    val _ = pLn (layout dot)
+    val _ = pLnEval (dot, vec1)
+    (* val _ = pLnDiff (fun2, R 0.0) *)
+    (* val _ = pLnDiff (fun2, R 1.0) *)
+    (* val _ = pLnDiff (fun2, R 2.0) *)
 in
     ()
 end;
