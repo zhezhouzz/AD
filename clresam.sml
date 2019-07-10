@@ -107,6 +107,8 @@ fun eval (f, v: t) : t =
           | evalAdd (Pair (v11, v12), Pair (v21, v22)) = Pair (evalAdd (v11, v12), evalAdd (v21, v22))
           | evalAdd (a, b) = add2 (a, b)
         fun evalMul (C a, C b) = C (a * b)
+          | evalMul (C a, Limit (len2, x2, f2)) = Limit (len2, x2, evalMul (C a, f2))
+          | evalMul (Limit (len1, x1, f1), C b) = Limit (len1, x1, evalMul (f1, C b))
           | evalMul (Limit (len1, x1, f1), Limit (len2, x2, f2)) =
             let
                 val x = newSym ()
@@ -170,8 +172,8 @@ end
 
 structure D =
 struct
-
-datatype t = Scale of real
+structure F = Func
+datatype t = Scale of F.t
            | Var of string
            | Add
            | Pair of t * t
@@ -185,7 +187,7 @@ fun add2 (a, b) = Circ (Add, Pair (a, b))
 fun left e = Circ (Left, e)
 fun right e = Circ (Right, e)
 
-fun layoutAux (Scale r, _) = Real.toString r
+fun layoutAux (Scale r, _) = F.layout r
   | layoutAux (Var x, _) = x
   | layoutAux (Limit (i, x, body), _) = "tab[" ^ x ^ " in " ^ (Int.toString i) ^ ": " ^ (layoutAux (body, false)) ^ "]"
   | layoutAux (Fadd, _) = "⊕"
@@ -221,15 +223,14 @@ fun evalCirc d =
     let
         fun evalScale (s, d) =
             let
-                fun aux (Scale r) = Scale (r * s)
-                  | aux (Var x) = Circ (Scale s, Var x)
+                fun aux (Scale r) = Scale (F.eval (F.mul2 (r, s), F.C 0.0))
                   | aux (Pair (a, b)) = Pair (aux a, aux b)
                   | aux (Limit (len, x, body)) = Limit (len, x, aux body)
                   | aux _ = raise Fail "bad scale"
             in
                 aux d
             end
-        fun evalAdd (Scale a, Scale b) = Scale (a + b)
+        fun evalAdd (Scale a, Scale b) = Scale (F.eval (F.add2 (a, b), F.C 0.0))
           | evalAdd (Limit (len1, x1, body1), Limit (len2, x2, body2)) =
             let
                 val x = newSym ()
@@ -249,21 +250,23 @@ fun evalCirc d =
                 | (Add, Pair (a, b)) => evalAdd (a, b)
                 | (Pair (a, b), c) => Pair (aux (Circ (a, c)), aux (Circ (b, c)))
                 | (Limit (len, x, body), _) => Limit (len, x, aux body)
-                | (Fadd, Limit (len, x, body)) =>
-                  let
-                      val base = List.tabulate (len, fn i => Scale (Real.fromInt i))
-                      val res = List.map (fn v => subst (body, x, v)) base
-                      val res = List.map aux res
-                      val r = List.foldl (fn (e, r) =>
-                                             case r of
-                                                 NONE => SOME e
-                                               | SOME r => SOME (add2 (r, e))
-                                         ) NONE res
-                  in
-                      case r of
-                          NONE => raise Fail "evalCirc"
-                        | SOME r => aux r
-                  end
+                | (Fadd, Scale (F.Limit (len, x, body))) =>
+                  Scale (F.eval (F.Circ (F.Fadd, F.Limit (len, x, body)), F.C 0.0))
+                  (* let *)
+                  (*     val base = List.tabulate (len, fn i => Scale (Real.fromInt i)) *)
+                  (*     val res = List.map (fn v => subst (body, x, v)) base *)
+                  (*     val res = List.map aux res *)
+                  (*     val r = List.foldl (fn (e, r) => *)
+                  (*                            case r of *)
+                  (*                                NONE => SOME e *)
+                  (*                              | SOME r => SOME (add2 (r, e)) *)
+                  (*                        ) NONE res *)
+                  (* in *)
+                  (*     case r of *)
+                  (*         NONE => raise Fail "evalCirc" *)
+                  (*       | SOME r => aux r *)
+                (* end *)
+                | (Fadd, Scale (F.C r)) => Scale (F.C r)
                 | (Left, Pair (a, b)) => a
                 | (Right, Pair (a, b)) => b
                 | (Circ (a, b), c) => aux (Circ (a, aux (Circ (b, c))))
@@ -284,10 +287,10 @@ structure D = D
 
 fun ad f : (t -> D.t)=
     let
-        fun aux (C r) : (t -> D.t)= (fn v => D.Scale 0.0)
+        fun aux (C r) : (t -> D.t)= (fn v => D.Scale (C 0.0))
           (* | aux (Var x) = (fn v => D.Var x) *)
-          | aux (Var x) = (fn v => D.Scale 0.0)
-          | aux Id = (fn v => D.Scale 1.0)
+          | aux (Var x) = (fn v => D.Scale (C 0.0))
+          | aux Id = (fn v => D.Scale (C 1.0))
           | aux (Limit (len, x, body)) = (fn v => D.Limit (len, x, (aux body) v))
           | aux Fadd = (fn v => D.Fadd)
           | aux Add = (fn v => D.Add)
@@ -296,10 +299,10 @@ fun ad f : (t -> D.t)=
                 let
                     val (a, b) =
                         case v of
-                            Pair (C a, C b) => (D.Scale a, D.Scale b)
-                          | Pair (C a, Var b) => (D.Scale a, D.Var b)
-                          | Pair (Var a, C b) => (D.Var a, D.Scale b)
-                          | Pair (Var a, Var b) => (D.Var a, D.Var b)
+                            Pair (a, b) => (D.Scale a, D.Scale b)
+                          (* | Pair (C a, Var b) => (D.Scale a, D.Var b) *)
+                          (* | Pair (Var a, C b) => (D.Var a, D.Scale b) *)
+                          (* | Pair (Var a, Var b) => (D.Var a, D.Var b) *)
                           | v => raise Fail ("ad:Mul:" ^ (layout v))
                 in
                     D.add2 (D.Circ (a, D.Right), D.Circ (b, D.Left))
@@ -351,18 +354,21 @@ let
     val _ = pLnEval (fun2, C 0.0)
     val _ = pLnEval (fun2, C 1.0)
     val _ = pLnEval (fun2, C 2.0)
+    val _ = pLnEval (elemwise, vec1)
     val _ = pLnDiff (fun2, C 0.0)
     val _ = pLnDiff (fun2, C 1.0)
     val _ = pLnDiff (fun2, C 2.0)
-    val _ = pLnEval (elemwise, vec1)
-    (* val _ = pLnDiff (elemwise, vec1) *)
+    val _ = pLnDiff (fun2, C 3.0)
+    val _ = pLnDiff (fun2, C 4.0)
+    val _ = pLnDiff (fun2, C 5.0)
     val _ = pLnVec (eval (elemwise, vec1))
     val dot = Circ (Fadd, mul2 (Id, Id))
     val _ = pLn (layout dot)
     val _ = pLnEval (dot, vec1)
-                    (* val _ = pLnDiff (fun2, R 0.0) *)
-                    (* val _ = pLnDiff (fun2, R 1.0) *)
-                    (* val _ = pLnDiff (fun2, R 2.0) *)
+    val fun3 = Circ (dot, fun1)
+    val _ = pLnDiff (fun3, C 0.0)
+    val _ = pLnDiff (fun3, C 1.0)
+    val _ = pLnDiff (fun3, C 2.0)
 in
     ()
 end;
