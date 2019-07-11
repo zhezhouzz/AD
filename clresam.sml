@@ -30,6 +30,7 @@ datatype t = C of real
            | Var of string
            | Id
            | Limit of int * string * t
+           | Pieces of (int * t) list
            | Fadd
            | Add
            | Mul
@@ -47,12 +48,13 @@ fun layoutFunc (C v, _) = Real.toString v
   | layoutFunc (Var x, _) = x
   | layoutFunc (Id, _) = "id"
   | layoutFunc (Limit (i, x, body), _) = "tab[" ^ x ^ " in " ^ (Int.toString i) ^ ": " ^ (layoutFunc (body, false)) ^ "]"
+  | layoutFunc (Pieces l, _) =
+    let
+        val s = list2string (fn (len, f) => (Int.toString len) ^ " => " ^ (layoutFunc (f, false)), l)
+    in
+        "{" ^ s ^ "}"
+    end
   | layoutFunc (Fadd, _) = "⊕"
-  (* let *)
-  (*     val s = "⊕ " ^ (layoutFunc (vec, true)) *)
-  (* in *)
-  (*     if ifp then paren s else s *)
-  (* end *)
   | layoutFunc (Add, _) = "addC"
   | layoutFunc (Mul, _) = "mulC"
   | layoutFunc (Pair (e1, e2), ifp) =
@@ -81,6 +83,8 @@ fun subst (body, id, e) =
               | Id => Id
               | Limit (len, y, body) =>
                 if id = y then Limit (len, y, body) else Limit (len, y, aux body)
+              | Pieces l =>
+                Pieces (List.map (fn (len, f) => (len, aux f)) l)
               | Fadd => Fadd
               | Add => Add
               | Mul => Mul
@@ -92,9 +96,27 @@ fun subst (body, id, e) =
         aux body
     end
 
+fun calibrate (l1, l2) =
+    case (l1, l2) of
+        ([], l2) => raise Fail "length is not equal"
+      | (l1, []) => raise Fail "length is not equal"
+      | ((thr1, f1) :: t1, (thr2, f2) :: t2) =>
+        if thr1 = thr2
+        then (thr1, f1, f2) :: (calibrate (t1, t2))
+        else if thr1 < thr2
+        then (thr1, f1, f2) :: (calibrate (t1, (thr2, f2) :: t2))
+        else (thr2, f1, f2) :: (calibrate ((thr1, f1) :: t1, t2))
+
 fun eval (f, v: t) : t =
     let
         fun evalAdd (C a, C b) = C (a + b)
+          | evalAdd (Pieces l1, Pieces l2) =
+            let
+                val l = calibrate (l1, l2)
+                val l = List.map (fn (thr, f1, f2) => (thr, evalAdd (f1, f2))) l
+            in
+                Pieces l
+            end
           | evalAdd (Limit (len1, x1, f1), Limit (len2, x2, f2)) =
             let
                 val x = newSym ()
@@ -107,6 +129,13 @@ fun eval (f, v: t) : t =
           | evalAdd (Pair (v11, v12), Pair (v21, v22)) = Pair (evalAdd (v11, v12), evalAdd (v21, v22))
           | evalAdd (a, b) = add2 (a, b)
         fun evalMul (C a, C b) = C (a * b)
+          | evalMul (Pieces l1, Pieces l2) =
+            let
+                val l = calibrate (l1, l2)
+                val l = List.map (fn (thr, f1, f2) => (thr, evalMul (f1, f2))) l
+            in
+                Pieces l
+            end
           | evalMul (C a, Limit (len2, x2, f2)) = Limit (len2, x2, evalMul (C a, f2))
           | evalMul (Limit (len1, x1, f1), C b) = Limit (len1, x1, evalMul (f1, C b))
           | evalMul (Limit (len1, x1, f1), Limit (len2, x2, f2)) =
@@ -128,6 +157,22 @@ fun eval (f, v: t) : t =
           | (Id, v) => v
           | (Var x, _) => Var x
           | (Limit (len, x, body), v) => Limit (len, x, eval (body, v))
+          | (Pieces l, v) =>
+            let
+                val v = case v of
+                            C v => v
+                          | _ => raise Fail "eval: bad pieces"
+                val r = List.foldl (fn ((thr, f), r) =>
+                                       case r of
+                                           SOME r => SOME r
+                                         | NONE =>
+                                           if v < (Real.fromInt thr) then SOME f else NONE
+                                   ) NONE l
+            in
+                case r of
+                    NONE => raise Fail "eval: pieces out of scope"
+                  | SOME f => eval (f, C v)
+            end
           | (Fadd, Limit (len, x, body)) =>
             let
                 val body = subst (body, x, Id)
@@ -178,6 +223,7 @@ datatype t = Scale of F.t
            | Add
            | Pair of t * t
            | Limit of int * string * t
+           (* | Pieces of (int * t) list *)
            | Fadd
            | Left
            | Right
@@ -190,6 +236,12 @@ fun right e = Circ (Right, e)
 fun layoutAux (Scale r, _) = F.layout r
   | layoutAux (Var x, _) = x
   | layoutAux (Limit (i, x, body), _) = "tab[" ^ x ^ " in " ^ (Int.toString i) ^ ": " ^ (layoutAux (body, false)) ^ "]"
+  (* | layoutFunc (Pieces l, _) = *)
+  (*   let *)
+  (*       val s = list2string (fn (len, f) => (Int.toString len) ^ " => " ^ (layoutFunc (f, false))) l *)
+  (*   in *)
+  (*       "{" ^ s ^ "}" *)
+  (*   end *)
   | layoutAux (Fadd, _) = "⊕"
   | layoutAux (Add, _) = "addD"
   | layoutAux (Pair (e1, e2), ifp) =
@@ -213,6 +265,7 @@ fun subst (f, x, v) =
         fun aux (Var y) = if x = y then v else Var y
           | aux (Pair (a, b)) = Pair (aux a, aux b)
           | aux (Limit (len, y, body)) = if x = y then Limit (len, y, body) else Limit (len, y, aux body)
+          (* | Piece l => List.map (fn (len, f) => (len, aux f)) l *)
           | aux (Circ (a, b)) = Circ (aux a, aux b)
           | aux f = f
     in
@@ -252,20 +305,6 @@ fun evalCirc d =
                 | (Limit (len, x, body), _) => Limit (len, x, aux body)
                 | (Fadd, Scale (F.Limit (len, x, body))) =>
                   Scale (F.eval (F.Circ (F.Fadd, F.Limit (len, x, body)), F.C 0.0))
-                  (* let *)
-                  (*     val base = List.tabulate (len, fn i => Scale (Real.fromInt i)) *)
-                  (*     val res = List.map (fn v => subst (body, x, v)) base *)
-                  (*     val res = List.map aux res *)
-                  (*     val r = List.foldl (fn (e, r) => *)
-                  (*                            case r of *)
-                  (*                                NONE => SOME e *)
-                  (*                              | SOME r => SOME (add2 (r, e)) *)
-                  (*                        ) NONE res *)
-                  (* in *)
-                  (*     case r of *)
-                  (*         NONE => raise Fail "evalCirc" *)
-                  (*       | SOME r => aux r *)
-                (* end *)
                 | (Fadd, Scale (F.C r)) => Scale (F.C r)
                 | (Left, Pair (a, b)) => a
                 | (Right, Pair (a, b)) => b
@@ -288,10 +327,27 @@ structure D = D
 fun ad f : (t -> D.t)=
     let
         fun aux (C r) : (t -> D.t)= (fn v => D.Scale (C 0.0))
-          (* | aux (Var x) = (fn v => D.Var x) *)
           | aux (Var x) = (fn v => D.Scale (C 0.0))
           | aux Id = (fn v => D.Scale (C 1.0))
           | aux (Limit (len, x, body)) = (fn v => D.Limit (len, x, (aux body) v))
+          | aux (Pieces l) =
+            (fn v =>
+                let
+                    val v = case v of
+                                C v => v
+                              | _ => raise Fail "eval: bad pieces"
+                    val r = List.foldl (fn ((thr, f), r) =>
+                                           case r of
+                                               SOME r => SOME r
+                                             | NONE =>
+                                               if v < (Real.fromInt thr) then SOME f else NONE
+                                       ) NONE l
+                in
+                    case r of
+                        NONE => raise Fail "DPlus: eval: pieces out of scope"
+                      | SOME f => (aux f) (C v)
+                end
+            )
           | aux Fadd = (fn v => D.Fadd)
           | aux Add = (fn v => D.Add)
           | aux Mul =
@@ -331,7 +387,36 @@ fun pLnDiff (f, v) =
     in
         pLn s
     end
+fun unfold (f, x) =
+    let
+         fun aux (Var y) = if y = x then Id else Var y
+          | aux (Limit (len, y, body)) =
+            if y = x
+            then aux body
+            else Limit (len, y, aux body)
+          | aux (Pieces l) = Pieces (List.map (fn (len, f) => (len, aux f)) l)
+          | aux (Pair (a, b)) = Pair (aux a, aux b)
+          | aux (Circ (a, b)) = Circ (aux a, aux b)
+          | aux a = a
+    in
+        aux f
+    end
 
+fun pLnDiffVec (f, g, x, len) =
+    let
+        val g' = unfold (g, x)
+        val f' = Circ (f, g')
+        val _ = pLn (layout g')
+        val _ = pLn (layout f')
+        fun aux v =
+            case (D.evalCirc ((ad f') v), D.evalCirc ((ad g') v)) of
+                (D.Scale (C r1), D.Scale (C r2)) => r1/r2
+              | (a, b) => raise Fail ("not a Scale: " ^ (D.layoutAux (a, false)) ^ " / " ^ (D.layoutAux (b, false)))
+        val base = List.tabulate (len, fn i => C (Real.fromInt i))
+        val l = List.map aux base
+    in
+        pLn (list2string (Real.toString, l))
+    end
 end
 
 open Func;
@@ -369,6 +454,13 @@ let
     val _ = pLnDiff (fun3, C 0.0)
     val _ = pLnDiff (fun3, C 1.0)
     val _ = pLnDiff (fun3, C 2.0)
+    val fun4 = Pieces [(4, add2 (C 1.0, mul2 (C 2.0, Id))), (10, add2 (C 1.0, mul2 (C ~2.0, Id)))]
+    val _ = List.map (fn e => pLnEval (fun4, e)) (List.tabulate (10, fn i => C (Real.fromInt i)))
+    val vec2 = Limit (10, "x", Pieces [(4, add2 (C 1.0, mul2 (C 2.0, Var "x"))), (10, add2 (C 1.0, mul2 (C ~2.0, Var "x")))])
+    val _ = pLn (layout vec2)
+    val _ = pLnVec vec2
+    val _ = pLnEval (dot, vec2)
+    val _ = pLnDiffVec (dot, vec2, "x", 10)
 in
     ()
 end;
